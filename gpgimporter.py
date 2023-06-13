@@ -5,13 +5,22 @@ Just a very simple Python tool, without any fancy code-design bla-bla.
 """
 
 import argparse
+import datetime
 import subprocess
-import re
 import sys
+import gnupg
 
-import requests
-from bs4 import BeautifulSoup
-
+def cleanup_all_keys():
+    print("Cleaning up expired keys..")
+    all_keys = gpg.list_keys()
+    for key in all_keys:
+        try:
+            timestamp = datetime.datetime.fromtimestamp(int(key["expires"]))
+            if timestamp < datetime.datetime.now():
+                gpg.delete_keys(key["fingerprint"])
+        except ValueError:
+            # key never expires (expires: '')
+            pass
 
 parser = argparse.ArgumentParser(
     prog="gpgimporter",
@@ -19,20 +28,19 @@ parser = argparse.ArgumentParser(
     epilog="Really simple and stupid",
 )
 
-
 parser.add_argument(
-    "-k", "--keyserver", help="Keyserver hostname without https:// or hkps:// prefix."
+    "-k", "--keyserver", help="Keyserver hostname without https:// or hkps:// prefix.", required=True
 )
 parser.add_argument("-l", "--lookup", help="Any string to filter the GPG list by.")
-parser.add_argument("-r", "--refresh", action="store_true")
+parser.add_argument("-t", "--trust-level", help="Trust level to set for the imported keys ('TRUST_EXPIRED', 'TRUST_UNDEFINED', 'TRUST_NEVER', 'TRUST_MARGINAL', 'TRUST_FULLY' or 'TRUST_ULTIMATE').", default="TRUST_FULLY")
+parser.add_argument("-s", "--sign", help="Sign imported keys with your default key.", action="store_true")
+parser.add_argument("-r", "--refresh", help="Only refresh and cleanup existing keys.", action="store_true")
 
 options = parser.parse_args()
-
-if options.keyserver is None:
-    print("--keyserver must be provided")
-    sys.exit(1)
+gpg = gnupg.GPG()
 
 if options.refresh:
+    cleanup_all_keys()
     subprocess.run(
         [
             "gpg",
@@ -43,68 +51,29 @@ if options.refresh:
         ],
         check=True,
     )
-    list_expired_keys = subprocess.run(
-        "gpg",
-        "--list-keys",
-        "|",
-        "grep -1 pub",
-        "|",
-        "sed 'N;s/\n/ /'",
-        "|",
-        "awk '/^pub.* \[expired\: / {id=$7; sub(/^.*\//, \"\", id); print id}'",
-        "|",
-        "fmt -w 999",
-    )
-    list_revoked_keys = subprocess.run(
-        "gpg",
-        "--list-keys",
-        "|",
-        "grep -1 pub",
-        "|",
-        "sed 'N;s/\n/ /'",
-        "|",
-        "awk '/^pub.* \[revoked\: / {id=$7; sub(/^.*\//, \"\", id); print id}'",
-        "|",
-        "fmt -w 999",
-    )
     sys.exit(0)
 
 if options.lookup is None:
     print("--lookup must be provided")
     sys.exit(1)
 
-lookup_url = f"/pks/lookup?search={options.lookup}&fingerprint=on&op=index"
-r = requests.get(f"https://{options.keyserver}{lookup_url}", timeout=5)
+search_results = gpg.search_keys(options.lookup, keyserver=f"hkps://{options.keyserver}")
+key_ids = [d['keyid'] for d in search_results]
 
-soup = BeautifulSoup(r.text)
+if len(search_results) != len(key_ids):
+    print("Something went wrong with importing the keys from your key server!")
 
-all_keys = ""
-all_fingerprints = []
-num_keys = 0
+print(f"Number of keys: {len(key_ids)}")
+print("Importing keys.. (might take some time)")
+imported_keys = gpg.recv_keys(f"hkps://{options.keyserver}", *key_ids)
+print(f"Number of imported keys: {imported_keys.count}")
 
-gpg_sha_regex = re.compile(
-    r"(?P<hash>\b[0-9a-fA-F]{8}\b).*Fingerprint=(?P<fingerprint>\b[0-9a-fA-F ]+\b)",
-    re.DOTALL,
-)
+gpg.trust_keys(imported_keys.fingerprints, options.trust_level)
 
-for link in soup.find_all("pre"):
-    m = re.search(gpg_sha_regex, link.text)
-    try:
-        all_keys += m.group("hash") + " "
-        all_fingerprints.append(m.group("fingerprint"))
-        num_keys += 1
-    except AttributeError:
-        print(f'warn: could not find a key in this line: "{link.text.strip()}"')
+if not options.sign:
+    sys.exit(0)
 
-print(f"Number of keys: {num_keys}")
-
-subprocess.run(
-    f"gpg --batch --keyserver hkps://{options.keyserver} --receive-keys {all_keys}",
-    shell=True,
-    check=True,
-)
-
-for f in all_fingerprints:
+for f in imported_keys.fingerprints:
     try:
         subprocess.run(f"gpg --quick-sign-key '{f}'", shell=True, check=True)
     except subprocess.CalledProcessError as e:

@@ -6,6 +6,7 @@ name = "pypi"
 [packages]
 requests = '*'
 beautifulsoup4 = '*'
+python-gnupg = '*'
 
 [requires]
 python_version = "3.10"
