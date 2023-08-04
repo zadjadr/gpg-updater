@@ -10,6 +10,7 @@ import subprocess
 import sys
 import gnupg
 
+
 def cleanup_all_keys():
     print("Cleaning up expired keys..")
     all_keys = gpg.list_keys()
@@ -17,10 +18,12 @@ def cleanup_all_keys():
         try:
             timestamp = datetime.datetime.fromtimestamp(int(key["expires"]))
             if timestamp < datetime.datetime.now():
+                print(f"Deleting expired key of '{key['uids']}'")
                 gpg.delete_keys(key["fingerprint"])
         except ValueError:
             # key never expires (expires: '')
             pass
+
 
 parser = argparse.ArgumentParser(
     prog="gpgimporter",
@@ -29,12 +32,30 @@ parser = argparse.ArgumentParser(
 )
 
 parser.add_argument(
-    "-k", "--keyserver", help="Keyserver hostname without https:// or hkps:// prefix.", required=True
+    "-k",
+    "--keyserver",
+    help="Keyserver hostname without https:// or hkps:// prefix.",
+    required=True,
 )
 parser.add_argument("-l", "--lookup", help="Any string to filter the GPG list by.")
-parser.add_argument("-t", "--trust-level", help="Trust level to set for the imported keys ('TRUST_EXPIRED', 'TRUST_UNDEFINED', 'TRUST_NEVER', 'TRUST_MARGINAL', 'TRUST_FULLY' or 'TRUST_ULTIMATE').", default="TRUST_FULLY")
-parser.add_argument("-s", "--sign", help="Sign imported keys with your default key.", action="store_true")
-parser.add_argument("-r", "--refresh", help="Only refresh and cleanup existing keys.", action="store_true")
+parser.add_argument(
+    "-t",
+    "--trust-level",
+    help="Trust level to set for the imported keys ('TRUST_EXPIRED', 'TRUST_UNDEFINED', 'TRUST_NEVER', 'TRUST_MARGINAL', 'TRUST_FULLY' or 'TRUST_ULTIMATE').",
+    default="TRUST_FULLY",
+)
+parser.add_argument(
+    "-s",
+    "--sign",
+    help="Sign imported keys with your default key.",
+    action="store_true",
+)
+parser.add_argument(
+    "-r",
+    "--refresh",
+    help="Only refresh and cleanup existing keys.",
+    action="store_true",
+)
 
 options = parser.parse_args()
 gpg = gnupg.GPG()
@@ -57,8 +78,10 @@ if options.lookup is None:
     print("--lookup must be provided")
     sys.exit(1)
 
-search_results = gpg.search_keys(options.lookup, keyserver=f"hkps://{options.keyserver}")
-key_ids = [d['keyid'] for d in search_results]
+search_results = gpg.search_keys(
+    options.lookup, keyserver=f"hkps://{options.keyserver}"
+)
+key_ids = [d["keyid"] for d in search_results]
 
 if len(search_results) != len(key_ids):
     print("Something went wrong with importing the keys from your key server!")
@@ -78,4 +101,7 @@ for f in imported_keys.fingerprints:
         subprocess.run(f"gpg --quick-sign-key '{f}'", shell=True, check=True)
     except subprocess.CalledProcessError as e:
         print(e)
-        sys.exit(e.returncode)
+        print(f"Deleting the key '{f}'")
+        gpg.delete_keys(f)
+
+cleanup_all_keys()
