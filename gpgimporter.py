@@ -12,18 +12,48 @@ import gnupg
 
 
 def cleanup_all_keys():
-    print("Cleaning up expired keys..")
-    all_keys = gpg.list_keys()
-    for key in all_keys:
-        try:
-            timestamp = datetime.datetime.fromtimestamp(int(key["expires"]))
-            if timestamp < datetime.datetime.now():
-                print(f"Deleting expired key of '{key['uids']}'")
-                gpg.delete_keys(key["fingerprint"])
-        except ValueError:
-            # key never expires (expires: '')
-            pass
+    print("Cleaning up expired and duplicate keys..")
 
+    now = datetime.datetime.now()
+    newest_by_uid = {}
+    keys_to_delete = []
+
+    for key in gpg.list_keys():
+        fingerprint = key["fingerprint"]
+        uid = key["uids"][0]  # or another UID selection strategy
+
+        # ---- Expiration check ----
+        expires = key.get("expires")
+        if expires:
+            try:
+                if datetime.datetime.fromtimestamp(int(expires)) < now:
+                    print(f"Deleting expired key of '{uid}'")
+                    keys_to_delete.append(fingerprint)
+                    continue  # don't consider expired key for duplicate logic
+            except (ValueError, TypeError):
+                pass
+
+        # ---- Duplicate handling ----
+        created = int(key["date"])
+
+        existing = newest_by_uid.get(uid)
+        if existing is None:
+            newest_by_uid[uid] = (created, fingerprint)
+        else:
+            existing_created, existing_fp = existing
+            print(f"Deleting duplicate key of '{uid}'")
+
+            if created > existing_created:
+                # Current key is newer → delete previous
+                keys_to_delete.append(existing_fp)
+                newest_by_uid[uid] = (created, fingerprint)
+            else:
+                # Existing key is newer → delete current
+                keys_to_delete.append(fingerprint)
+
+    # Delete everything at the end
+    for fingerprint in keys_to_delete:
+        gpg.delete_keys(fingerprint)
 
 parser = argparse.ArgumentParser(
     prog="gpgimporter",
